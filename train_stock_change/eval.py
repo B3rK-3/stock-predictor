@@ -1,4 +1,4 @@
-from functions import (
+from train_stock_change.functions import (
     split_image,
     get_piece_means,
     dtws,
@@ -39,13 +39,13 @@ import os
 import wandb
 import pandas as pd
 import pandas_ta as pdt
-from utils import prepare_dataset
+from train_stock_change.functions import prepare_dataset
 
 isVanillaLSTM = True
 if isVanillaLSTM:
-    from functions import VanillaLSTM as LSTM
+    from train_stock_change.functions import VanillaLSTM as LSTM
 else:
-    from functions import LSTM as LSTM
+    from train_stock_change.functions import LSTM as LSTM
 
 warnings.filterwarnings("ignore")
 

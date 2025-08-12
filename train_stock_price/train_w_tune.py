@@ -2,29 +2,26 @@ import os
 import sys
 import time
 import warnings
-
-import numpy as np
 import torch
 import wandb
 from torch import nn
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 from torch.utils.data import DataLoader, TensorDataset
-from functions import (
-    lstm_ready,
-    min_max_scaling,
-    training_loop_w_stats,
-    PlateauStopper,
-)
 from ray import tune
 import ray
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.schedulers import ASHAScheduler
 import re
-import pandas as pd
-import pandas_ta as pdt
 from eval import eval_tune
+from functions import (
+    prepare_dataset,
+    PlateauStopper,
+    DATA_PATH,
+    RESULTS_PATH,
+    BASE_PATH,
+    isVanillaLSTM,
+)
 
-isVanillaLSTM = True
 
 if isVanillaLSTM:
     from functions import VanillaLSTM as LSTM
@@ -35,96 +32,7 @@ else:
 
     model_type = "LSTM"
 
-
-# Assume these are defined in a 'functions.py' file or similar
-# from functions import LSTM, lstm_ready, min_max_scaling
-
 warnings.filterwarnings("ignore")
-
-# --- Configuration ---
-# Define constants and configurations at the top level for clarity.
-
-l = re.split(r"[\\/]", os.path.abspath(os.getcwd()))
-BASE_PATH = "/".join(l[:-1]) + "/"
-
-DATA_PATH = BASE_PATH + "stock-predictor/data"
-RESULTS_PATH = BASE_PATH + "stock-predictor/results"
-os.makedirs(RESULTS_PATH, exist_ok=True)  # Ensure the results directory exists
-
-# --- Data Loading & Preparation ---
-
-
-def load_data(stock):
-    """Loads and preprocesses data for a single Active Region (AR)."""
-    try:
-        data = pd.read_csv(
-            f"{DATA_PATH}/{stock}.csv"
-        )  # "ticker","name","date","open","high","low","close","adjusted close","volume"
-        # data["sma_5"] = pdt.sma(data["close"], length=5)
-        data["ema_5"] = pdt.ema(data["close"], length=5)
-        data["rsi_14"] = pdt.rsi(data["close"], length=14)
-        data["macd"] = pdt.macd(data["close"])["MACD_12_26_9"]
-        data["atr"] = pdt.atr(data["high"], data["low"], data["close"])
-        # BBM_20 = pdt.bbands(data["close"], length=20)
-        # data["BBU_20"] = BBM_20["BBU_20_2.0"]
-        # data["BBM_20"] = BBM_20["BBM_20_2.0"]
-        # data["BBL_20"] = BBM_20["BBL_20_2.0"]
-        data["close_roc"] = data["close"].diff()
-        data["volume_roc"] = data["volume"].diff()
-        data["ema_diff"] = data["ema_5"].diff()
-
-        # remove unnecessary data
-        del data["name"]
-        del data["date"]
-        del data["ticker"]
-        del data["adjusted close"]
-
-        return data
-    except FileNotFoundError:
-        print(f"Warning: Data file for {stock} not found. Skipping.")
-        return None
-
-
-def prepare_dataset(stock, num_in, num_pred):
-    # Load data
-    data = load_data(stock)
-    data.dropna(inplace=True)
-    columns = list(data.columns)
-    train_size = int(len(data) * 0.8)
-    train_data = data[columns].iloc[:train_size]
-    test_data = data[columns].iloc[train_size:]
-
-    for column in columns:
-        mn = np.min(train_data[column])
-        mx = np.max(train_data[column])
-        train_data[column] = min_max_scaling(train_data[column], mn, mx)
-        test_data[column] = min_max_scaling(test_data[column], mn, mx)
-
-    # Create sequences for the LSTM
-    x_train, y_train = [], []
-    for i in range(len(train_data) - num_in - num_pred):
-        x_train.append(train_data[columns].iloc[i : i + num_in].values)
-        y_train.append(
-            train_data["close"].iloc[i + num_in : i + num_in + num_pred].values
-        )
-
-    x_test, y_test = [], []
-    for i in range(len(test_data) - num_in - num_pred):
-        x_test.append(test_data[columns].iloc[i : i + num_in].values)
-        y_test.append(
-            test_data["close"].iloc[i + num_in : i + num_in + num_pred].values
-        )
-
-    X_train = torch.from_numpy(
-        np.array(x_train, dtype=np.float32)
-    )  # shape: [N_train, num_in, n_features]
-    y_train = torch.from_numpy(
-        np.array(y_train, dtype=np.float32)
-    )  # shape: [N_train, num_pred]
-    X_test = torch.from_numpy(np.array(x_test, dtype=np.float32))
-    y_test = torch.from_numpy(np.array(y_test, dtype=np.float32))
-
-    return X_train, y_train, X_test, y_test, len(columns)
 
 
 # --- Model Training & Evaluation ---
@@ -218,7 +126,7 @@ def main(config):
     # --- Data Loading ---
     print("Batch size:", config["batch_size"])
     print("Loading and preparing training data...")
-    stocks = ["A"]
+    stocks = ["AAPL"]
     for stock in stocks:
         # Initialize wandb
         wandb.init(

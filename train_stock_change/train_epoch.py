@@ -9,22 +9,22 @@ import wandb
 from torch import nn
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 from torch.utils.data import DataLoader, TensorDataset
-from functions import (
+from train_stock_change.functions import (
     min_max_scaling,
 )
 import re
 import pandas as pd
 import pandas_ta as pdt
-from eval import eval_tune
+from train_stock_change.eval import eval_tune
 
 isVanillaLSTM = True
 
 if isVanillaLSTM:
-    from functions import VanillaLSTM as LSTM
+    from train_stock_change.functions import VanillaLSTM as LSTM
 
     model_type = "VanillaLSTM"
 else:
-    from functions import LSTM as LSTM
+    from train_stock_change.functions import LSTM as LSTM
 
     model_type = "LSTM"
 

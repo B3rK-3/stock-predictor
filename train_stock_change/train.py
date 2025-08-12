@@ -2,28 +2,24 @@ import os
 import sys
 import time
 import warnings
-
 import numpy as np
 import torch
 import wandb
 from torch import nn
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 from torch.utils.data import DataLoader, TensorDataset
-from functions import (
-    min_max_scaling,
-)
 import re
-from eval import eval_tune
-from utils import prepare_dataset
+from train_stock_change.eval import eval_tune
+from train_stock_change.functions import prepare_dataset
 
 isVanillaLSTM = True
 
 if isVanillaLSTM:
-    from functions import VanillaLSTM as LSTM
+    from train_stock_change.functions import VanillaLSTM as LSTM
 
     model_type = "VanillaLSTM"
 else:
-    from functions import LSTM as LSTM
+    from train_stock_change.functions import LSTM as LSTM
 
     model_type = "LSTM"
 
@@ -141,7 +137,7 @@ def main(config):
     # --- Data Loading ---
     print("Batch size:", config["batch_size"])
     print("Loading and preparing training data...")
-    stocks = ["A"]
+    stocks = ["AAPL"]
     for stock in stocks:
         x_train, y_train, x_test, y_test,_, input_size = prepare_dataset(
             stock,
@@ -215,7 +211,7 @@ def parse_args():
     """Parses command-line arguments."""
     if len(sys.argv) != 7:
         print(
-            "Usage: python train.py <num_pred> <rid_of_top> <num_in> <num_layers> <hidden_size> <n_epochs> <learning_rate> <dropout> <grid_search sample_size>"
+            "Usage: python train.py <num_pred> <num_layers> <hidden_size> <n_epochs> <learning_rate> <dropout> <grid_search sample_size>"
         )
         sys.exit(1)
 
