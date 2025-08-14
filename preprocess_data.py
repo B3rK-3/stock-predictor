@@ -1,90 +1,54 @@
+from functions import prepare_dataset, DATA_PATH
+import os
 import pandas as pd
-import pandas_ta as pdt
-import re, os, numpy as np
-import torch
+import numpy as np
+import warnings
 
+warnings.filterwarnings('ignore')
 
-l = re.split(r"[\\/]", os.path.abspath(os.getcwd()))
-BASE_PATH = "/".join(l[:-1]) + "/"
+dirs = os.listdir(DATA_PATH)
 
-DATA_PATH = BASE_PATH + "stock-predictor/data"
-RESULTS_PATH = BASE_PATH + "stock-predictor/results"
-os.makedirs(RESULTS_PATH, exist_ok=True)  # Ensure the results directory exists
+x_trains_list = []
+y_trains_list = []
+x_tests_list = []
+y_tests_list = []
+times_tests_list = []
 
+EXPECTED_X_DIMS = 3
+EXPECTED_Y_DIMS = 2 
 
-def load_data(stock):
-    """Loads and preprocesses data for a single Active Region (AR)."""
-    try:
-        data = pd.read_csv(
-            f"{DATA_PATH}/{stock}.csv"
-        )  # "ticker","name","date","open","high","low","close","adjusted close","volume"
-        data["low"] = data["low"].pct_change()
-        data["high"] = data["high"].pct_change()
-        data["close"] = data["close"].pct_change()
-        data["open"] = data["open"].pct_change()
+for i in range(4500):
+    x_train, y_train, x_test, y_test, time_test, _ = prepare_dataset(dirs[i], 7, 2)
 
-        data["rsi_14"] = pdt.rsi(data["close"], length=14)
-        data["atr"] = pdt.atr(data["high"], data["low"], data["close"], length=14)
-        data["volume_ratio"] = data["volume"] / data["volume"].rolling(30).mean()
-
-        macd_df = pdt.macd(data["close"], fast=12, slow=26, signal=9)
-        data["macd"] = macd_df["MACD_12_26_9"]
-        data["macd_signal"] = macd_df["MACDs_12_26_9"]
+    
+    if (x_train is not None and y_train is not None and x_test is not None and y_test is not None and
+            x_train.ndim == EXPECTED_X_DIMS and x_test.ndim == EXPECTED_X_DIMS and
+            y_train.ndim == EXPECTED_Y_DIMS and y_test.ndim == EXPECTED_Y_DIMS and
+            x_train.shape[0] > 0 and x_test.shape[0] > 0):
         
-
-        # remove unnecessary data
-        del data["name"]
-        del data["date"]
-        del data["ticker"]
-        del data["adjusted close"]
-        del data["volume"]
-
-        return data
-    except FileNotFoundError:
-        print(f"Warning: Data file for {stock} not found. Skipping.")
-        return None
+        x_trains_list.append(x_train)
+        y_trains_list.append(y_train)
+        x_tests_list.append(x_test)
+        y_tests_list.append(y_test)
+        times_tests_list.append(time_test.iloc[7+1:])
+    else:
+        print(f"Skipping data at index {i} (file: {dirs[i]}) due to invalid shape or empty data.")
 
 
-def prepare_dataset(stock, num_in, num_pred):
-    # Load data
-    data = load_data(stock)
-    data.dropna(inplace=True)
+x_trains = np.concatenate(x_trains_list, axis=0)
+y_trains = np.concatenate(y_trains_list, axis=0)
+x_tests = np.concatenate(x_tests_list, axis=0)
+y_tests = np.concatenate(y_tests_list, axis=0)
+times_tests = np.concatenate(times_tests_list, axis=0)
 
-    columns = list(data.columns)
-    train_size = int(len(data) * 0.8)
-    train_data = data[columns].iloc[:train_size]
-    test_data = data[columns].iloc[train_size:]
 
-    for column in columns:
-        mean = np.mean(train_data[column])
-        std = np.std(train_data[column])
-        train_data[column] = (train_data[column] - mean) / std
-        test_data[column] = (test_data[column] - mean) / std
+np.savez_compressed(
+    'stock_data.npz',
+    x_trains=x_trains,
+    y_trains=y_trains,
+    x_tests=x_tests,
+    y_tests=y_tests,
+    times_tests=times_tests
+)
 
-    # Create sequences for the LSTM
-    x_train, y_train = [], []
-    for i in range(len(train_data) - num_in - num_pred):
-        x_train.append(train_data[columns].iloc[i : i + num_in].values)
-        y_train.append(
-            train_data["close"].iloc[i + num_in : i + num_in + num_pred].values
-        )
-
-    x_test, y_test = [], []
-    for i in range(len(test_data) - num_in - num_pred):
-        x_test.append(test_data[columns].iloc[i : i + num_in].values)
-        y_test.append(
-            test_data["close"].iloc[i + num_in : i + num_in + num_pred].values
-        )
-
-    X_train = torch.from_numpy(
-        np.array(x_train, dtype=np.float32)
-    )  # shape: [N_train, num_in, n_features]
-    y_train = torch.from_numpy(
-        np.array(y_train, dtype=np.float32)
-    )  # shape: [N_train, num_pred]
-    X_test = torch.from_numpy(np.array(x_test, dtype=np.float32))
-    y_test = torch.from_numpy(np.array(y_test, dtype=np.float32))
-
-    print(X_train)
-    print(X_test)
-    return X_train, y_train, X_test, y_test, len(columns)
+print("Data successfully processed and saved to stock_data.npz")

@@ -9,104 +9,152 @@ from datetime import datetime
 import random
 import torch.nn as nn
 from ray import tune
-import numpy as np
 
 l = re.split(r"[\\/]", os.path.abspath(os.getcwd()))
 BASE_PATH = "/".join(l[:-1]) + "/"
 
 DATA_PATH = BASE_PATH + "stock-predictor/data"
-RESULTS_PATH = BASE_PATH + "stock-predictor/train_stock_price/results"
-os.makedirs(RESULTS_PATH, exist_ok=True)  
-isVanillaLSTM = True
+RESULTS_PATH = BASE_PATH + "stock-predictor/train_stock_change/results"
+os.makedirs(RESULTS_PATH, exist_ok=True)  # Ensure the results directory exists
 
-def load_data(stock):
+
+def load_data(stock_csv):
     """Loads and preprocesses data for a single Active Region (AR)."""
     try:
-        data = pd.read_csv(
-            f"{DATA_PATH}/{stock}.csv"
+        read = pd.read_csv(
+            f"{DATA_PATH}/{stock_csv}"
         )  # "ticker","name","date","open","high","low","close","adjusted close","volume"
-        # data["sma_5"] = pdt.sma(data["close"], length=5)
-        data["ema_5"] = pdt.ema(data["close"], length=5)
-        data["rsi_14"] = pdt.rsi(data["close"], length=14)
-        data["macd"] = pdt.macd(data["close"])["MACD_12_26_9"]
-        data["atr"] = pdt.atr(data["high"], data["low"], data["close"])
-        # BBM_20 = pdt.bbands(data["close"], length=20)
-        # data["BBU_20"] = BBM_20["BBU_20_2.0"]
-        # data["BBM_20"] = BBM_20["BBM_20_2.0"]
-        # data["BBL_20"] = BBM_20["BBL_20_2.0"]
-        data["close_roc"] = data["close"].diff()
-        data["volume_roc"] = data["volume"].diff()
-        data["ema_diff"] = data["ema_5"].diff()
+        if read.shape[0] < 50: return None
+        data = pd.DataFrame()
+        # --- Feature Engineering ---
+        # 1. Calculate indicators from RAW prices and add as new columns
+        data["rsi_14"] = pdt.rsi(read["close"], length=14)
+        data["atr"] = pdt.atr(read["high"], read["low"], read["close"], length=14)
+        macd_df = pdt.macd(read["close"], fast=12, slow=26, signal=9)
+        data["macd"] = macd_df["MACD_12_26_9"]
+        data["macd_signal"] = macd_df["MACDs_12_26_9"]
+        data["volume_ratio"] = read["volume"] / read["volume"].rolling(30).mean()
 
-        # remove unnecessary data
-        del data["name"]
-        del data["date"]
-        del data["ticker"]
-        del data["adjusted close"]
+        # 2. Calculate pct_change features with NEW names
+        data["open_pct"] = read["open"].pct_change()
+        data["high_pct"] = read["high"].pct_change()
+        data["low_pct"] = read["low"].pct_change()
+        data["close_pct"] = read["close"].pct_change()  # This will be our target 'y'
+        bollinger = pdt.bbands(read["close"], length=20)
+        data["bb_width"] = (
+            bollinger["BBU_20_2.0"] - bollinger["BBL_20_2.0"]
+        ) / bollinger["BBM_20_2.0"]
+
+        time_col_name = "timestamp" if "timestamp" in read.columns else "date"
+        data["timestamp"] = pd.to_datetime(read[time_col_name])
+
+        # 4. Drop all NaNs created by indicators and pct_change
+        data.dropna(inplace=True)
+
+        """More Momentum:
+
+    Stochastic Oscillator (%K and %D): Similar to RSI, shows overbought/oversold levels.
+
+    pdt.stoch(data['high'], data['low'], data['close'])
+
+Volatility:
+
+    Bollinger Bands: Specifically, the width of the bands ((Upper - Lower) / Middle) is a great measure of volatility squeeze/expansion.
+
+    bollinger = pdt.bbands(data['close'])
+
+    data['bb_width'] = (bollinger['BBU_20_2.0'] - bollinger['BBL_20_2.0']) / bollinger['BBM_20_2.0']
+
+Volume/Money Flow:
+
+    On-Balance Volume (OBV): A classic indicator that relates price change to volume.
+
+    pdt.obv(data['close'], data['volume'])
+
+Time/Calendar Features:
+
+    data['day_of_week'] = data.index.dayofweek
+
+    data['month'] = data.index.month
+
+    These should be one-hot encoded before being fed to the model."""
 
         return data
     except FileNotFoundError:
-        print(f"Warning: Data file for {stock} not found. Skipping.")
+        print(f"Warning: Data file for {stock_csv} not found. Skipping.")
         return None
 
 
-def prepare_dataset(stock, num_in, num_pred):
-    # Load data
-    data = load_data(stock)
-    data.dropna(inplace=True)
-    columns = list(data.columns)
-    train_size = int(len(data) * 0.8)
-    train_data = data[columns].iloc[:train_size]
-    test_data = data[columns].iloc[train_size:]
+def prepare_dataset(stock_csv, num_in, num_pred):
+    """
+    Loads, processes, splits, and scales data correctly without data leakage,
+    then creates sequences for both training and testing.
+    """
+    # Use the corrected data loading/feature engineering function from our previous discussion
+    data = load_data(stock_csv)
+    if data is None:
+        return None, None, None, None, None, None
 
-    for column in columns:
-        scaler = MinMaxScaler()
-        scaler.fit(np.stack(train_data[column]).reshape(-1, 1))
-        train_data[column] = scaler.transform(train_data[column])
-        test_data[column] = scaler.transform(test_data[column])
+    feature_columns = [
+        col for col in data.columns if col != "close_pct" and col != "timestamp"
+    ]
+    target_column = "close_pct"
+    time = data["timestamp"]
 
-    # Create sequences for the LSTM
-    x_train, y_train = [], []
-    for i in range(len(train_data) - num_in - num_pred):
-        x_train.append(train_data[columns].iloc[i : i + num_in].values)
-        y_train.append(
-            train_data["close"].iloc[i + num_in : i + num_in + num_pred].values
-        )
+    X = data[feature_columns]
+    y = data[target_column]
 
-    x_test, y_test = [], []
-    for i in range(len(test_data) - num_in - num_pred):
-        x_test.append(test_data[columns].iloc[i : i + num_in].values)
-        y_test.append(
-            test_data["close"].iloc[i + num_in : i + num_in + num_pred].values
-        )
+    train_size = int(len(data) * 0.75)
 
-    X_train = torch.from_numpy(
-        np.array(x_train, dtype=np.float32)
-    )  # shape: [N_train, num_in, n_features]
-    y_train = torch.from_numpy(
-        np.array(y_train, dtype=np.float32)
-    )  # shape: [N_train, num_pred]
-    X_test = torch.from_numpy(np.array(x_test, dtype=np.float32))
-    y_test = torch.from_numpy(np.array(y_test, dtype=np.float32))
+    X_train, X_test = X.iloc[:train_size], X.iloc[train_size:]
+    y_train, y_test = y.iloc[:train_size], y.iloc[train_size:]
+    time_test = time.iloc[train_size:]
 
-    return X_train, y_train, X_test, y_test, len(columns)
+    feature_scaler = StandardScaler()
+
+
+    feature_scaler.fit(X_train)
+
+
+    X_train_scaled = feature_scaler.transform(X_train)
+    X_test_scaled = feature_scaler.transform(X_test)
+
+    # training sequences
+    x_train_seq, y_train_seq = [], []
+    for i in range(len(X_train_scaled) - num_in - num_pred + 1):
+        x_train_seq.append(X_train_scaled[i : i + num_in])
+        y_train_seq.append(y_train.iloc[i + num_in : i + num_in + num_pred].values)
+
+    # testing sequences
+    x_test_seq, y_test_seq = [], []
+    for i in range(len(X_test_scaled) - num_in - num_pred + 1):
+        x_test_seq.append(X_test_scaled[i : i + num_in])
+        y_test_seq.append(y_test.iloc[i + num_in : i + num_in + num_pred].values)
+
+    X_train_tensor = np.array(x_train_seq, dtype=np.float32)
+    y_train_tensor = np.array(y_train_seq, dtype=np.float32)
+    X_test_tensor = np.array(x_test_seq, dtype=np.float32)
+    y_test_tensor = np.array(y_test_seq, dtype=np.float32)
+
+    return (
+        X_train_tensor,
+        y_train_tensor,
+        X_test_tensor,
+        y_test_tensor,
+        time_test,
+        len(feature_columns),
+    )
 
 
 def calculate_metrics(timeline_true, timeline_predicted):
-    # Ensure inputs are NumPy arrays for consistency
     timeline_true = np.array(timeline_true)
     timeline_predicted = np.array(timeline_predicted)
-    # Calculate Mean Absolute Error (MAE)
     MAE = np.mean(np.abs(timeline_predicted - timeline_true))
-    # Calculate Mean Squared Error (MSE)
     MSE = np.mean(np.square(timeline_predicted - timeline_true))
-    # Calculate Root Mean Squared Error (RMSE)
     RMSE = np.sqrt(MSE)
-    # Calculate Root Mean Squared Logarithmic Error (RMSLE)
     RMSLE = np.sqrt(
         np.mean(np.square(np.log1p(timeline_predicted) - np.log1p(timeline_true)))
     )
-    # Calculate R-squared (R²)
     SS_res = np.sum(np.square(timeline_true - timeline_predicted))
     SS_tot = np.sum(np.square(timeline_true - np.mean(timeline_true)))
     R_squared = 1 - (SS_res / SS_tot)
@@ -114,7 +162,6 @@ def calculate_metrics(timeline_true, timeline_predicted):
 
 
 class LSTM(nn.Module):
-    # __init__ stays the same...
     def __init__(self, input_size, hidden_size, num_layers, output_length, dropout=0.0):
         super(LSTM, self).__init__()
         self.hidden_size = hidden_size
@@ -129,12 +176,9 @@ class LSTM(nn.Module):
 
         self.decoder_fc = nn.Linear(hidden_size, 1)
 
-    # The forward pass now accepts the target tensor 'y' for teacher forcing
     def forward(self, x, y=None, teacher_forcing_ratio=0.5):
-        # Encoder
         _, (hidden, cell) = self.encoder_lstm(x)
 
-        # Decoder
         decoder_input = torch.zeros(x.size(0), 1, 1).to(x.device)
         outputs = []
 

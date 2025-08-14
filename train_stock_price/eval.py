@@ -61,7 +61,6 @@ def eval(device):
     # Assuming prediction, y_test_tensors, ARs, learning_rate, and n_epochs are already defined
     fig = plt.figure()  # Adjust the figure size if necessary
 
-    # Loop to create 8 plots
     future = 1
     all_metrics = []
     x_test = x_test.to(device)
@@ -135,7 +134,6 @@ def eval_tune(device, state_dict, num_in, num_layers, num_pred, hidden_size, sto
     lstm.load_state_dict(new_state_dict)
     lstm.eval()  # Set the model to evaluation model
 
-    # Loop to create 8 plots
     future = 1
     all_metrics = []
     x_test = x_test.to(device)
