@@ -85,6 +85,7 @@ Time/Calendar Features:
 
 
 def prepare_dataset(stock, num_in, num_pred):
+    print('hey')
     """
     Loads, processes, splits, and scales data correctly without data leakage,
     then creates sequences for both training and testing.
@@ -109,7 +110,7 @@ def prepare_dataset(stock, num_in, num_pred):
     # =================================================================
     # STEP 2: SPLIT INTO FOUR DISTINCT SETS: X_train, X_test, y_train, y_test
     # =================================================================
-    train_size = int(len(data) * 0)
+    train_size = int(len(data) * 0.75)
 
     X_train, X_test = X.iloc[:train_size], X.iloc[train_size:]
     y_train, y_test = y.iloc[:train_size], y.iloc[train_size:]

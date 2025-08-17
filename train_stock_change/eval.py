@@ -1,21 +1,7 @@
-from train_stock_change.functions import (
-    split_image,
-    get_piece_means,
-    dtws,
-    lstm_ready,
-    training_loop,
-    split_sequences,
-    min_max_scaling,
-    amplify_fluctuations,
+from functions import (
     calculate_metrics,
-    emergence_indication,
-    smooth_with_numpy,
-    recalibrate,
-    find_closest_fits_frame_to_NOAA_record,
-    add_grid_lines,
-    highlight_tile,
-    emergence_indication2,
 )
+import sys
 from torch.optim.lr_scheduler import StepLR, ExponentialLR, ReduceLROnPlateau
 from torch.utils.data import Dataset, TensorDataset, DataLoader
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
@@ -39,13 +25,13 @@ import os
 import wandb
 import pandas as pd
 import pandas_ta as pdt
-from train_stock_change.functions import prepare_dataset
+from functions import prepare_dataset
 
 isVanillaLSTM = True
 if isVanillaLSTM:
-    from train_stock_change.functions import VanillaLSTM as LSTM
+    from functions import VanillaLSTM as LSTM
 else:
-    from train_stock_change.functions import LSTM as LSTM
+    from functions import LSTM as LSTM
 
 warnings.filterwarnings("ignore")
 
@@ -57,24 +43,38 @@ RESULTS_PATH = BASE_PATH + "stock-predictor/results"
 os.makedirs(RESULTS_PATH, exist_ok=True)  # Ensure the results directory exists
 
 
-def eval(device):
-    pth_files = glob.glob(
-        RESULTS_PATH + "/*.pth"
-    )  # Assuming there's only one .pth file and its naming follows the specific pattern
-    filename = pth_files[0]
+def load_data(path):
+    """Loads and preprocesses data for a single Active Region (AR)."""
+    try:
+        loaded = np.load(path)
+        return (
+            None,
+            None,
+            torch.from_numpy(loaded["x_tests"]),
+            torch.from_numpy(loaded["y_tests"]),
+            loaded["times_tests"],
+            loaded["x_trains"].shape[2],
+        )
+    except FileNotFoundError:
+        print(f"Warning: Data file for {path} not found. Skipping.")
+        return None
+
+
+def eval(device, filename):
     matches = re.findall(
-        r"(\w+)_p(\d+)_in(\d+)_l(\d+)_h(\d+).pth",
+        r"ALL_p(\d+)_in(\d+)_l(\d+)_h(\d+).pth",
         filename,
     )  # Extract numbers from the filename
     (
-        stock,
         num_pred,
         num_in,
         num_layers,
         hidden_size,
     ) = [
-        val if i == 0 else int(val) for i, val in enumerate(matches[0])
+        int(val) for i, val in enumerate(matches[0])
     ]  # Unpack the matched values into variables
+    filepath = RESULTS_PATH + "/" + filename
+    stock = "AAPL"
     print(
         f"Extracted from filename: Stock: {stock} Time Window: {num_pred}, Number of Inputs: {num_in}, Number of Layers: {num_layers}, Hidden Size: {hidden_size}"
     )  # Print extracted values for confirmation
@@ -83,7 +83,7 @@ def eval(device):
 
     # Initialize the LSTM and move it to GPU
     lstm = LSTM(input_size, hidden_size, num_layers, num_pred).to(device)
-    saved_state_dict = torch.load(filename, map_location=device)
+    saved_state_dict = torch.load(filepath, map_location=device)
     new_state_dict = OrderedDict()
     for k, v in saved_state_dict.items():
         name = k[7:] if k.startswith("module.") else k  # remove 'module.' prefix
@@ -97,10 +97,11 @@ def eval(device):
     # Loop to create 8 plots
     future = 1
     all_metrics = []
-    x_test = x_test.to(device)
-    predictions = lstm(x_test)
-    pred = predictions[:, future].detach().cpu().numpy()
-    true = y_test[:, future].numpy()
+    with torch.no_grad():
+        x_test = x_test.to(device)
+        predictions = lstm(x_test)
+        pred = predictions[:, future].detach().cpu().numpy()
+        true = y_test[:, future].numpy()
     start = num_in + future
 
     offset = num_in + future
@@ -155,8 +156,17 @@ def eval(device):
     return metrics[2]
 
 
-def eval_tune(device, state_dict, num_in, num_layers, num_pred, hidden_size, stock):
-    _, _, x_test, y_test, time, input_size = prepare_dataset(stock, num_in, num_pred)
+def eval_tune(
+    device,
+    state_dict,
+    num_in,
+    num_layers,
+    num_pred,
+    hidden_size,
+    evalnpz_path,
+    batch_size,
+):
+    _, _, x_test, y_test, time, input_size = load_data(evalnpz_path)
 
     # Initialize the LSTM and move it to GPU
     lstm = LSTM(input_size, hidden_size, num_layers, num_pred).to(device)
@@ -168,17 +178,27 @@ def eval_tune(device, state_dict, num_in, num_layers, num_pred, hidden_size, sto
     lstm.load_state_dict(new_state_dict)
     lstm.eval()  # Set the model to evaluation model
 
+    test_loader = DataLoader(
+        TensorDataset(x_test, y_test), batch_size=batch_size, shuffle=False
+    )
     # Loop to create 8 plots
     future = 1
-    all_metrics = []
-    x_test = x_test.to(device)
-    predictions = lstm(x_test)
-    pred = predictions[:, future].detach().cpu().numpy()
-    true = y_test[:, future].numpy()
+    all_predictions = []
+    all_actuals = []
+    with torch.no_grad():
+        for x, y in test_loader:
+            x = x.to(device)
+            predictions = lstm(x)
+            pred_batch = predictions[:, future].detach().cpu().numpy()
+            true_batch = y[:, future].cpu().numpy()
+            all_predictions.append(pred_batch)
+            all_actuals.append(true_batch)
+
+    preds = np.concatenate(all_predictions, axis=0)
+    trues = np.concatenate(all_actuals, axis=0)
 
     # Evaluation metrics
-    metrics = calculate_metrics(true, pred)
-    all_metrics.append(metrics)
+    metrics = calculate_metrics(trues, preds)
     print("Metrics:", metrics)
     # print(f"MAE: {metrics[0]}")
     # print(f"MSE: {metrics[1]}")
@@ -193,4 +213,4 @@ if __name__ == "__main__":
         "cuda" if torch.cuda.is_available() else "cpu"
     )  # Define the device (either 'cuda' for GPU or 'cpu' for CPU)
     print("Runs on: {}".format(device), " / Using", torch.cuda.device_count(), "GPUs!")
-    eval(device)
+    eval(device, sys.argv[1])

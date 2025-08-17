@@ -17,7 +17,7 @@ times_tests_list = []
 EXPECTED_X_DIMS = 3
 EXPECTED_Y_DIMS = 2 
 
-for i in range(4500):
+for i in range(4500,7000):
     x_train, y_train, x_test, y_test, time_test, _ = prepare_dataset(dirs[i], 7, 2)
 
     
@@ -43,7 +43,7 @@ times_tests = np.concatenate(times_tests_list, axis=0)
 
 
 np.savez_compressed(
-    'stock_data.npz',
+    'stock_data_eval.npz',
     x_trains=x_trains,
     y_trains=y_trains,
     x_tests=x_tests,
