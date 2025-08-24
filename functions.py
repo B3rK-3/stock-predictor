@@ -13,39 +13,40 @@ from ray import tune
 l = re.split(r"[\\/]", os.path.abspath(os.getcwd()))
 BASE_PATH = "/".join(l[:-1]) + "/"
 
-DATA_PATH = BASE_PATH + "stock-predictor/data"
+DATA_PATH = BASE_PATH + "stock-predictor/test_data"
 RESULTS_PATH = BASE_PATH + "stock-predictor/train_stock_change/results"
 os.makedirs(RESULTS_PATH, exist_ok=True)  # Ensure the results directory exists
 
 
-def load_data(stock_csv):
+def load_data(stock_csv, min_points):
     """Loads and preprocesses data for a single Active Region (AR)."""
     try:
         read = pd.read_csv(
             f"{DATA_PATH}/{stock_csv}"
         )  # "ticker","name","date","open","high","low","close","adjusted close","volume"
-        if read.shape[0] < 50: return None
+        if read.shape[0] <= max(60, min_points):
+            return None
         data = pd.DataFrame()
         # --- Feature Engineering ---
         # 1. Calculate indicators from RAW prices and add as new columns
-        data["rsi_14"] = pdt.rsi(read["close"], length=14)
-        data["atr"] = pdt.atr(read["high"], read["low"], read["close"], length=14)
-        macd_df = pdt.macd(read["close"], fast=12, slow=26, signal=9)
+        data["rsi_14"] = pdt.rsi(read["Close"], length=14)
+        data["atr"] = pdt.atr(read["High"], read["Low"], read["Close"], length=14)
+        macd_df = pdt.macd(read["Close"], fast=12, slow=26, signal=9)
         data["macd"] = macd_df["MACD_12_26_9"]
         data["macd_signal"] = macd_df["MACDs_12_26_9"]
-        data["volume_ratio"] = read["volume"] / read["volume"].rolling(30).mean()
+        data["volume_ratio"] = read["Volume"] / read["Volume"].rolling(30).mean()
 
         # 2. Calculate pct_change features with NEW names
-        data["open_pct"] = read["open"].pct_change()
-        data["high_pct"] = read["high"].pct_change()
-        data["low_pct"] = read["low"].pct_change()
-        data["close_pct"] = read["close"].pct_change()  # This will be our target 'y'
-        bollinger = pdt.bbands(read["close"], length=20)
+        data["open_pct"] = read["Open"].pct_change()
+        data["high_pct"] = read["High"].pct_change()
+        data["low_pct"] = read["Low"].pct_change()
+        data["close_pct"] = read["Close"].pct_change()  # This will be our target 'y'
+        bollinger = pdt.bbands(read["Close"], length=20)
         data["bb_width"] = (
             bollinger["BBU_20_2.0"] - bollinger["BBL_20_2.0"]
         ) / bollinger["BBM_20_2.0"]
 
-        time_col_name = "timestamp" if "timestamp" in read.columns else "date"
+        time_col_name = "timestamp" if "timestamp" in read.columns else "Datetime"
         data["timestamp"] = pd.to_datetime(read[time_col_name])
 
         # 4. Drop all NaNs created by indicators and pct_change
@@ -91,7 +92,7 @@ def prepare_dataset(stock_csv, num_in, num_pred):
     then creates sequences for both training and testing.
     """
     # Use the corrected data loading/feature engineering function from our previous discussion
-    data = load_data(stock_csv)
+    data = load_data(stock_csv, num_in + num_pred)
     if data is None:
         return None, None, None, None, None, None
 
@@ -111,13 +112,17 @@ def prepare_dataset(stock_csv, num_in, num_pred):
     time_test = time.iloc[train_size:]
 
     feature_scaler = StandardScaler()
+    target_scaler = StandardScaler() # Create a SEPARATE scaler for the target
 
+    # Fit the scalers ONLY on the training data
+    X_train_scaled = feature_scaler.fit_transform(X_train)
+    # Reshape y_train to be a 2D array for the scaler
+    y_train = target_scaler.fit_transform(y_train.values.reshape(-1, 1))
 
-    feature_scaler.fit(X_train)
-
-
-    X_train_scaled = feature_scaler.transform(X_train)
+    # Use the fitted scalers to transform the test sets
     X_test_scaled = feature_scaler.transform(X_test)
+    y_test = target_scaler.transform(y_test.values.reshape(-1, 1))
+
 
     # training sequences
     x_train_seq, y_train_seq = [], []

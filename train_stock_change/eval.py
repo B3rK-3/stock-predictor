@@ -46,7 +46,7 @@ os.makedirs(RESULTS_PATH, exist_ok=True)  # Ensure the results directory exists
 def load_data(path):
     """Loads and preprocesses data for a single Active Region (AR)."""
     try:
-        loaded = np.load(path)
+        loaded = np.load(path, allow_pickle=True)
         return (
             None,
             None,
@@ -74,12 +74,14 @@ def eval(device, filename):
         int(val) for i, val in enumerate(matches[0])
     ]  # Unpack the matched values into variables
     filepath = RESULTS_PATH + "/" + filename
-    stock = "AAPL"
+    stock = "NVDA"
     print(
         f"Extracted from filename: Stock: {stock} Time Window: {num_pred}, Number of Inputs: {num_in}, Number of Layers: {num_layers}, Hidden Size: {hidden_size}"
     )  # Print extracted values for confirmation
 
-    _, _, x_test, y_test, time, input_size = prepare_dataset(stock, num_in, num_pred)
+    _, _, x_test, y_test, time, input_size = load_data('stock_data_eval.npz')
+
+    # Initialize the LSTM and move it to GPU
 
     # Initialize the LSTM and move it to GPU
     lstm = LSTM(input_size, hidden_size, num_layers, num_pred).to(device)
@@ -109,22 +111,13 @@ def eval(device, filename):
         f"Window length (num_in): {num_in}, horizon‐index (future): {future}, offset = {offset}"
     )
 
-    for i in range(5):
-        # the timestamp you’re using to plot pred[i]:
-        t_pred = time.iloc[offset + i]
-        # the true timestamp for y_test[i]:
-        t_true = time.iloc[num_in + future + i]
-        print(
-            f"i={i:>2} | plot‐time={t_pred} "
-            f"| actual‐time={t_true} "
-            f"| pred={pred[i]:.3f} | true={true[i]:.3f}"
-        )
-    pred_times = time.iloc[start : start + len(pred)].to_numpy()
+
+    pred_times = time.reshape(-1,1)
 
     # now plot
     ax = plt.subplot()
-    ax.plot(pred_times, pred, label="predicted")
-    ax.plot(pred_times, true, label="actual")
+    ax.plot(pred_times[-50:], pred.reshape(-1,1)[-50:], label="predicted")
+    ax.plot(pred_times[-50:], true.reshape(-1,1)[-50:], label="actual")
     ax.set_title(f"{future + 1}-hour ahead prediction for {stock}")
     ax.legend()
 

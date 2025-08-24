@@ -50,34 +50,6 @@ def load_data(stock):
         # 4. Drop all NaNs created by indicators and pct_change
         data.dropna(inplace=True)
 
-        """More Momentum:
-
-    Stochastic Oscillator (%K and %D): Similar to RSI, shows overbought/oversold levels.
-
-    pdt.stoch(data['high'], data['low'], data['close'])
-
-Volatility:
-
-    Bollinger Bands: Specifically, the width of the bands ((Upper - Lower) / Middle) is a great measure of volatility squeeze/expansion.
-
-    bollinger = pdt.bbands(data['close'])
-
-    data['bb_width'] = (bollinger['BBU_20_2.0'] - bollinger['BBL_20_2.0']) / bollinger['BBM_20_2.0']
-
-Volume/Money Flow:
-
-    On-Balance Volume (OBV): A classic indicator that relates price change to volume.
-
-    pdt.obv(data['close'], data['volume'])
-
-Time/Calendar Features:
-
-    data['day_of_week'] = data.index.dayofweek
-
-    data['month'] = data.index.month
-
-    These should be one-hot encoded before being fed to the model."""
-
         return data
     except FileNotFoundError:
         print(f"Warning: Data file for {stock} not found. Skipping.")
@@ -236,7 +208,7 @@ class LSTM(nn.Module):
 
 class VanillaLSTM(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, output_length, dropout=0.0):
-        super(VanillaLSTM, self).__init__()
+        super().__init__()
 
         # A single LSTM layer that processes the entire input sequence
         self.lstm = nn.LSTM(
@@ -248,8 +220,12 @@ class VanillaLSTM(nn.Module):
         )
 
         # A single linear layer to map the final LSTM state to the desired output length
-        self.fc = nn.Linear(hidden_size, output_length)
-
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, hidden_size)   # linear head (no activation)
+        )
     def forward(self, x):
         # Pass the input sequence through the LSTM layer
         # We don't need the final hidden and cell states, just the output sequence

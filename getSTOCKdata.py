@@ -1,7 +1,8 @@
 import requests
 import yfinance
 
-df = yfinance.download('AAPL', period='1mo', interval='1h')
+stock = 'IWM'
+df = yfinance.download(stock, period='60d', interval='15m')
 
-df.to_csv("eval_data/AAPL.csv")
+df.to_csv(f"test_data/{stock}.csv")
 

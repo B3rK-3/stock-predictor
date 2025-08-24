@@ -172,6 +172,7 @@ def main(config):
     optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
     scheduler = ReduceLROnPlateau(optimizer, "min", factor=0.2, patience=5)
 
+    #batch data
     train_loader = DataLoader(
         TensorDataset(x_train, y_train),
         batch_size=config["batch_size"],
@@ -232,8 +233,8 @@ def parse_args():
 
     try:
         config = {
-            "num_pred": 2,
-            "num_in": 7,
+            "num_pred": 8,
+            "num_in": 28,
             "num_layers": int(sys.argv[1]),
             "hidden_size": int(sys.argv[2]),
             "n_epochs": int(sys.argv[3]),
